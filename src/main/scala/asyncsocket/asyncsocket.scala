@@ -55,7 +55,8 @@ trait AsyncByteChannel {
   def read(dst: ByteBuffer): Future[Integer] =
     makeFuture[Integer](channel.read(dst, null, _))
 
-  def readFully(dst: ByteBuffer)(implicit ec: ExecutionContext): Future[Unit] = {
+  def readFully(dst: ByteBuffer)(
+      implicit ec: ExecutionContext): Future[ByteBuffer] = {
     val future =
       if (!dst.hasRemaining) Future.successful(())
       else
@@ -65,21 +66,27 @@ trait AsyncByteChannel {
         }
 
     future.map { u =>
-      dst.flip; u
+      dst.flip; dst
     }
   }
 
   def read(i: Int)(implicit ec: ExecutionContext): Future[ByteBuffer] = {
     val bb = ByteBuffer.allocate(i)
-    readFully(bb).map(u => bb)
+    readFully(bb)
   }
 
   def write(src: ByteBuffer): Future[Integer] =
     makeFuture[Integer](channel.write(src, null, _))
 
-  def writeFully(dst: ByteBuffer)(
-      implicit ec: ExecutionContext): Future[Unit] =
-    if (!dst.hasRemaining) Future.successful(())
-    else write(dst).flatMap(i => writeFully(dst))
+  def writeFully(src: ByteBuffer)(
+      implicit ec: ExecutionContext): Future[ByteBuffer] = {
+    val f =
+      if (!src.hasRemaining) Future.successful(())
+      else write(src).flatMap(i => writeFully(src))
+
+    f.map { u =>
+      src.flip; src
+    }
+  }
 
 }
