@@ -57,17 +57,13 @@ trait AsyncByteChannel {
 
   def readFully(dst: ByteBuffer)(
       implicit ec: ExecutionContext): Future[ByteBuffer] = {
-    val future =
-      if (!dst.hasRemaining) Future.successful(())
-      else
-        read(dst).flatMap { i =>
-          if (i >= 0) readFully(dst)
-          else Future.successful(())
-        }
+    if (!dst.hasRemaining) Future.successful(dst)
+    else
+      read(dst).flatMap { i =>
+        if (i >= 0) readFully(dst)
+        else Future.successful(dst)
+      }
 
-    future.map { u =>
-      dst.flip; dst
-    }
   }
 
   def read(i: Int)(implicit ec: ExecutionContext): Future[ByteBuffer] = {
@@ -79,14 +75,8 @@ trait AsyncByteChannel {
     makeFuture[Integer](channel.write(src, null, _))
 
   def writeFully(src: ByteBuffer)(
-      implicit ec: ExecutionContext): Future[ByteBuffer] = {
-    val f =
-      if (!src.hasRemaining) Future.successful(())
-      else write(src).flatMap(i => writeFully(src))
-
-    f.map { u =>
-      src.flip; src
-    }
-  }
+      implicit ec: ExecutionContext): Future[ByteBuffer] =
+    if (!src.hasRemaining) Future.successful(src)
+    else write(src).flatMap(i => writeFully(src))
 
 }
