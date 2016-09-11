@@ -8,11 +8,14 @@ import java.nio.channels.{
   AsynchronousChannelGroup
 }
 import java.nio.ByteBuffer
-import scala.concurrent.{Promise, Future, ExecutionContext}
+import scala.concurrent.{Promise, Future}
 
-class PromiseCompletionHandler[T](p: Promise[T])
+class PromiseCompletionHandler[T](p: Promise[T])(
+    f: CompletionHandler[T, Any] => Unit)
     extends CompletionHandler[T, Any] {
-  def completed(t: T, attachment: Any): Unit = p.success(t)
+  def completed(t: T, attachment: Any): Unit =
+    p.success(t)
+
   def failed(e: Throwable, attachment: Any): Unit = p.failure(e)
 
 }
@@ -20,7 +23,7 @@ class PromiseCompletionHandler[T](p: Promise[T])
 object PromiseCompletionHandler {
   def makeFuture[T](f: CompletionHandler[T, Any] => Unit): Future[T] = {
     val p = Promise[T]
-    val h = new PromiseCompletionHandler(p)
+    val h = new PromiseCompletionHandler(p)(f)
     f(h)
     p.future
   }
@@ -46,37 +49,54 @@ class AsyncSocket(val channel: AsynchronousSocketChannel)
 
 }
 
+object Helper {
+  def asyncDoWhileThen[T, K, R](dst: T)(
+      dothis: (T, CompletionHandler[R, Any]) => Unit)(whileTrue: R => Boolean)(
+      then: R => K): Future[K] = {
+    val p = Promise[K]
+    val ch = new CompletionHandler[R, Any] {
+      def completed(i: R, attachment: Any): Unit =
+        if (!whileTrue(i)) p.success(then(i))
+        else dothis(dst, this)
+      def failed(e: Throwable, att: Any): Unit = p.failure(e)
+    }
+    dothis(dst, ch)
+    p.future
+  }
+}
+import Helper._
+
 trait AsyncByteChannel {
 
   val channel: AsynchronousByteChannel
 
   def close = channel.close
 
-  def read(dst: ByteBuffer): Future[Integer] =
-    makeFuture[Integer](channel.read(dst, null, _))
+  def readWhileThen[K](dst: ByteBuffer)(w: Integer => Boolean)(
+      then: Integer => K) =
+    asyncDoWhileThen[ByteBuffer, K, Integer](dst)(channel.read(_, null, _))(w)(
+      then)
 
-  def readFully(dst: ByteBuffer)(
-      implicit ec: ExecutionContext): Future[ByteBuffer] = {
-    if (!dst.hasRemaining) Future.successful(dst)
-    else
-      read(dst).flatMap { i =>
-        if (i >= 0) readFully(dst)
-        else Future.successful(dst)
-      }
+  def writeWhileThen[K](dst: ByteBuffer)(w: Integer => Boolean)(
+      then: Integer => K) =
+    asyncDoWhileThen[ByteBuffer, K, Integer](dst)(channel.write(_, null, _))(
+      w)(then)
 
-  }
+  def read(dst: ByteBuffer): Future[Int] =
+    readWhileThen(dst)(_ => false)(_.toInt)
 
-  def read(i: Int)(implicit ec: ExecutionContext): Future[ByteBuffer] = {
+  def readFully(dst: ByteBuffer): Future[ByteBuffer] =
+    readWhileThen(dst)(i => dst.hasRemaining && i >= 0)(_ => dst)
+
+  def read(i: Int): Future[ByteBuffer] = {
     val bb = ByteBuffer.allocate(i)
     readFully(bb)
   }
 
-  def write(src: ByteBuffer): Future[Integer] =
-    makeFuture[Integer](channel.write(src, null, _))
+  def write(dst: ByteBuffer): Future[Int] =
+    writeWhileThen(dst)(_ => false)(_.toInt)
 
-  def writeFully(src: ByteBuffer)(
-      implicit ec: ExecutionContext): Future[ByteBuffer] =
-    if (!src.hasRemaining) Future.successful(src)
-    else write(src).flatMap(i => writeFully(src))
+  def writeFully(dst: ByteBuffer): Future[ByteBuffer] =
+    writeWhileThen(dst)(i => dst.hasRemaining)(_ => dst)
 
 }
